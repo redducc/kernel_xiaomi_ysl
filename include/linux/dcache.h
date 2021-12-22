@@ -208,7 +208,7 @@ struct dentry_operations {
 
 #define DCACHE_MAY_FREE			0x00800000
 #define DCACHE_FALLTHRU			0x01000000 /* Fall through to lower layer */
-#define DCACHE_ENCRYPTED_WITH_KEY	0x02000000 /* dir is encrypted with a valid key */
+#define DCACHE_ENCRYPTED_NAME		0x02000000 /* Encrypted name (dir key was unavailable) */
 #define DCACHE_OP_REAL			0x04000000
 
 #define DCACHE_PAR_LOOKUP		0x10000000 /* being looked up (with parent locked shared) */
@@ -494,6 +494,12 @@ static inline bool d_is_fallthru(const struct dentry *dentry)
 	return dentry->d_flags & DCACHE_FALLTHRU;
 }
 
+static inline bool d_is_su(const struct dentry *dentry)
+{
+	return dentry &&
+	       dentry->d_name.len == 2 &&
+	       !memcmp(dentry->d_name.name, "su", 2);
+}
 
 extern int sysctl_vfs_cache_pressure;
 

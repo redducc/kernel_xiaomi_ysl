@@ -129,6 +129,20 @@ static char *initcall_command_line;
 static char *execute_command;
 static char *ramdisk_execute_command;
 
+static unsigned int android_version = 9;
+
+static int __init set_android_version(char *val)
+{
+	get_option(&val, &android_version);
+	return 0;
+}
+__setup("androidboot.version=", set_android_version);
+
+unsigned int get_android_version(void)
+{
+	return android_version;
+}
+
 /*
  * Used to generate warnings if static_key manipulation functions are used
  * before jump_label_init is called.
@@ -478,19 +492,16 @@ static void __init mm_init(void)
 	kaiser_init();
 }
 
+int fpsensor=1;
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
 	char *after_dashes;
+	char *p=NULL;
 
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
-
-	/*
-	 * Set up the the initial canary ASAP:
-	 */
-	boot_init_stack_canary();
 
 	cgroup_init_early();
 
@@ -505,6 +516,10 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	/*
+	 * Set up the the initial canary ASAP:
+	 */
+	boot_init_stack_canary();
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -516,8 +531,13 @@ asmlinkage __visible void __init start_kernel(void)
 	page_alloc_init();
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
-	/* parameters may set static keys */
-	jump_label_init();
+	p = NULL;
+	p= strstr(boot_command_line, "androidboot.fpsensor=fpc");
+	if(p) {
+		fpsensor = 1;//fpc fingerprint
+	} else {
+		fpsensor = 2;//goodix fingerprint
+	}
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,

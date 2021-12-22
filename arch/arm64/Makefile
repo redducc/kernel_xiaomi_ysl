@@ -50,16 +50,10 @@ $(warning LSE atomics not supported by binutils)
   endif
 endif
 
-ifeq ($(cc-name),clang)
-# This is a workaround for https://bugs.llvm.org/show_bug.cgi?id=30792.
-# TODO: revert when this is fixed in LLVM.
-KBUILD_CFLAGS	+= -mno-implicit-float
-else
-KBUILD_CFLAGS	+= -mgeneral-regs-only
-endif
-KBUILD_CFLAGS	+= $(lseinstr)
+KBUILD_CFLAGS	+= -mgeneral-regs-only $(lseinstr)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
 KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
+KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
 KBUILD_CFLAGS	+= -fno-pic
 KBUILD_AFLAGS	+= $(lseinstr)
 
@@ -122,14 +116,22 @@ core-$(CONFIG_CRYPTO) += arch/arm64/crypto/
 libs-y		:= arch/arm64/lib/ $(libs-y)
 core-$(CONFIG_EFI_STUB) += $(objtree)/drivers/firmware/efi/libstub/lib.a
 
+ifeq ($(CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP),y)
+KBUILD_IMAGE   := Image.gz
+else
+KBUILD_IMAGE   := Image
+endif
+
 # Default target when executing plain make
 ifeq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
-KBUILD_IMAGE	:= $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_KERNEL_IMAGE_NAME))
-else
-KBUILD_IMAGE	:= Image.gz
+KBUILD_IMAGE	:=  $(addsuffix -dtb,$(KBUILD_IMAGE))
 endif
 
 KBUILD_DTBS	:= dtbs
+
+ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
+export DTC_FLAGS := -@
+endif
 
 all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
 

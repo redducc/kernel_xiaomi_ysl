@@ -36,6 +36,8 @@
 #define USB_VENDOR_GENESYS_LOGIC		0x05e3
 #define HUB_QUIRK_CHECK_PORT_AUTOSUSPEND	0x01
 
+extern int deny_new_usb;
+
 /* Protect struct usb_device->state and ->children members
  * Note: Both are also protected by ->dev.sem, except that ->state can
  * change to USB_STATE_NOTATTACHED even when the semaphore isn't held. */
@@ -47,6 +49,11 @@ static void hub_event(struct work_struct *work);
 
 /* synchronize hub-port add/remove and peering operations */
 DEFINE_MUTEX(usb_port_peer_mutex);
+
+static bool skip_extended_resume_delay = 1;
+module_param(skip_extended_resume_delay, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(skip_extended_resume_delay,
+		"removes extra delay added to finish bus resume");
 
 /* cycle leds on hubs that aren't blinking for attention */
 static bool blinkenlights;
@@ -637,6 +644,12 @@ void usb_kick_hub_wq(struct usb_device *hdev)
 	if (hub)
 		kick_hub_wq(hub);
 }
+
+void usb_flush_hub_wq(void)
+{
+	flush_workqueue(hub_wq);
+}
+EXPORT_SYMBOL(usb_flush_hub_wq);
 
 /*
  * Let the USB core know that a USB 3.0 device has sent a Function Wake Device
@@ -3479,7 +3492,9 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		/* drive resume for USB_RESUME_TIMEOUT msec */
 		dev_dbg(&udev->dev, "usb %sresume\n",
 				(PMSG_IS_AUTO(msg) ? "auto-" : ""));
-		msleep(USB_RESUME_TIMEOUT);
+		if (!skip_extended_resume_delay)
+			usleep_range(USB_RESUME_TIMEOUT * 1000,
+					(USB_RESUME_TIMEOUT + 1) * 1000);
 
 		/* Virtual root hubs can trigger on GET_PORT_STATUS to
 		 * stop resume signaling.  Then finish the resume
@@ -3502,7 +3517,7 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		}
 
 		/* TRSMRCY = 10 msec */
-		msleep(10);
+		usleep_range(10000, 10500);
 	}
 
 	if (udev->persist_enabled)
@@ -4827,7 +4842,7 @@ hub_power_remaining(struct usb_hub *hub)
 static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
 		u16 portchange)
 {
-	int status = -ENODEV;
+	int ret, status = -ENODEV;
 	int i;
 	unsigned unit_load;
 	struct usb_device *hdev = hub->hdev;
@@ -4836,6 +4851,7 @@ static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
 	struct usb_device *udev = port_dev->child;
 	static int unreliable_port = -1;
 	bool retry_locked;
+	enum usb_device_speed dev_speed = USB_SPEED_UNKNOWN;
 
 	/* Disconnect any existing devices under this port */
 	if (udev) {
@@ -4885,11 +4901,18 @@ static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
 			goto done;
 		return;
 	}
+
+	if (deny_new_usb) {
+		dev_err(&port_dev->dev, "denied insert of USB device on port %d\n", port1);
+		goto done;
+	}
+
 	if (hub_is_superspeed(hub->hdev))
 		unit_load = 150;
 	else
 		unit_load = 100;
 
+retry_enum:
 	status = 0;
 
 	for (i = 0; i < SET_CONFIG_TRIES; i++) {
@@ -4934,6 +4957,13 @@ static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
 		mutex_unlock(hcd->address0_mutex);
 		usb_unlock_port(port_dev);
 		retry_locked = false;
+
+		dev_speed = udev->speed;
+		if (udev->speed > USB_SPEED_UNKNOWN &&
+				udev->speed <= USB_SPEED_HIGH && hcd->usb_phy
+				&& hcd->usb_phy->disable_chirp)
+			hcd->usb_phy->disable_chirp(hcd->usb_phy,
+					false);
 
 		if (udev->quirks & USB_QUIRK_DELAY_INIT)
 			msleep(2000);
@@ -5050,6 +5080,19 @@ loop:
 		if (status != -ENOTCONN && status != -ENODEV)
 			dev_err(&port_dev->dev,
 					"unable to enumerate USB device\n");
+		if (!hub->hdev->parent && dev_speed == USB_SPEED_UNKNOWN
+			&& hcd->usb_phy && hcd->usb_phy->disable_chirp) {
+			ret = hcd->usb_phy->disable_chirp(hcd->usb_phy, true);
+			if (!ret) {
+				dev_dbg(&port_dev->dev,
+					"chirp disabled re-try enum\n");
+				goto retry_enum;
+			} else {
+				/* bail out and re-enable chirping */
+				hcd->usb_phy->disable_chirp(hcd->usb_phy,
+						false);
+			}
+		}
 	}
 
 done:

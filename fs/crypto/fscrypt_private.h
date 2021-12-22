@@ -11,9 +11,12 @@
 #ifndef _FSCRYPT_PRIVATE_H
 #define _FSCRYPT_PRIVATE_H
 
+#ifndef __FS_HAS_ENCRYPTION
 #define __FS_HAS_ENCRYPTION 1
+#endif
 #include <linux/fscrypt.h>
 #include <crypto/hash.h>
+#include <linux/pfk.h>
 
 /* Encryption parameters */
 #define FS_KEY_DERIVATION_NONCE_SIZE	16
@@ -49,6 +52,12 @@ struct fscrypt_symlink_data {
 	char encrypted_path[1];
 } __packed;
 
+enum ci_type_info {
+	CI_NONE_TYPE = 0,
+	CI_DATA_TYPE,
+	CI_FNAME_TYPE,
+};
+
 /*
  * fscrypt_info - the "encryption key" for an inode
  *
@@ -57,7 +66,6 @@ struct fscrypt_symlink_data {
  * inode is evicted.
  */
 struct fscrypt_info {
-
 	/* The actual crypto transform used for encryption and decryption */
 	struct crypto_skcipher *ci_ctfm;
 
@@ -81,11 +89,13 @@ struct fscrypt_info {
 	struct fscrypt_master_key *ci_master_key;
 
 	/* fields from the fscrypt_context */
+	u8 ci_type;
 	u8 ci_data_mode;
 	u8 ci_filename_mode;
 	u8 ci_flags;
 	u8 ci_master_key_descriptor[FS_KEY_DESCRIPTOR_SIZE];
 	u8 ci_nonce[FS_KEY_DERIVATION_NONCE_SIZE];
+	u8 ci_raw_key[FS_MAX_KEY_SIZE];
 };
 
 typedef enum {
@@ -94,7 +104,6 @@ typedef enum {
 } fscrypt_direction_t;
 
 #define FS_CTX_REQUIRES_FREE_ENCRYPT_FL		0x00000001
-#define FS_CTX_HAS_BOUNCE_BUFFER_FL		0x00000002
 
 static inline bool fscrypt_valid_enc_modes(u32 contents_mode,
 					   u32 filenames_mode)
@@ -107,6 +116,10 @@ static inline bool fscrypt_valid_enc_modes(u32 contents_mode,
 	    filenames_mode == FS_ENCRYPTION_MODE_AES_256_CTS)
 		return true;
 
+	if (contents_mode == FS_ENCRYPTION_MODE_PRIVATE &&
+	    filenames_mode == FS_ENCRYPTION_MODE_AES_256_CTS)
+		return true;
+
 	if (contents_mode == FS_ENCRYPTION_MODE_ADIANTUM &&
 	    filenames_mode == FS_ENCRYPTION_MODE_ADIANTUM)
 		return true;
@@ -114,17 +127,21 @@ static inline bool fscrypt_valid_enc_modes(u32 contents_mode,
 	return false;
 }
 
+static inline bool is_private_data_mode(struct fscrypt_info *ci)
+{
+	return ci->ci_type == CI_DATA_TYPE &&
+		ci->ci_data_mode == FS_ENCRYPTION_MODE_PRIVATE;
+}
+
 /* crypto.c */
 extern struct kmem_cache *fscrypt_info_cachep;
 extern int fscrypt_initialize(unsigned int cop_flags);
-extern int fscrypt_do_page_crypto(const struct inode *inode,
-				  fscrypt_direction_t rw, u64 lblk_num,
-				  struct page *src_page,
-				  struct page *dest_page,
-				  unsigned int len, unsigned int offs,
-				  gfp_t gfp_flags);
-extern struct page *fscrypt_alloc_bounce_page(struct fscrypt_ctx *ctx,
-					      gfp_t gfp_flags);
+extern int fscrypt_crypt_block(const struct inode *inode,
+			       fscrypt_direction_t rw, u64 lblk_num,
+			       struct page *src_page, struct page *dest_page,
+			       unsigned int len, unsigned int offs,
+			       gfp_t gfp_flags);
+extern struct page *fscrypt_alloc_bounce_page(gfp_t gfp_flags);
 extern const struct dentry_operations fscrypt_d_ops;
 
 extern void __printf(3, 4) __cold

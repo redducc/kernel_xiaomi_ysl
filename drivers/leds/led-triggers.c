@@ -44,7 +44,8 @@ ssize_t led_trigger_store(struct device *dev, struct device_attribute *attr,
 		goto unlock;
 	}
 
-	if (sysfs_streq(buf, "none")) {
+	if (sysfs_streq(buf, "none") &&
+			!(led_cdev->flags & LED_KEEP_TRIGGER)) {
 		led_trigger_remove(led_cdev);
 		goto unlock;
 	}
@@ -334,6 +335,21 @@ void led_trigger_blink_oneshot(struct led_trigger *trig,
 	led_trigger_blink_setup(trig, delay_on, delay_off, 1, invert);
 }
 EXPORT_SYMBOL_GPL(led_trigger_blink_oneshot);
+struct led_trigger *led_trigger_get(const char *name)
+{
+	struct led_trigger *_trig;
+
+	down_write(&triggers_list_lock);
+	/* Make sure the trigger's name isn't already in use */
+	list_for_each_entry(_trig, &trigger_list, next_trig) {
+		if (!strcmp(_trig->name, name)) {
+			up_write(&triggers_list_lock);
+			return _trig;
+		}
+	}
+	up_write(&triggers_list_lock);
+	return NULL;
+}
 
 void led_trigger_register_simple(const char *name, struct led_trigger **tp)
 {
@@ -354,6 +370,9 @@ void led_trigger_register_simple(const char *name, struct led_trigger **tp)
 	} else {
 		pr_warn("LED trigger %s failed to register (no memory)\n",
 			name);
+	}
+	if (!strcmp("switch_trigger", name) && trig == NULL) {
+		 trig = led_trigger_get(name);
 	}
 	*tp = trig;
 }
